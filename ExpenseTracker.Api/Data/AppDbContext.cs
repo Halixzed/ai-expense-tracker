@@ -9,6 +9,8 @@ public class AppDbContext : DbContext
 
     public DbSet<Expense> Expenses { get; set; }
     public DbSet<Category> Categories { get; set; }
+    public DbSet<UserSettings> UserSettings { get; set; }
+    public DbSet<CategoryBudget> CategoryBudgets { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -25,6 +27,28 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Expense>()
             .Property(e => e.CategoryId)
             .HasDefaultValue(10);
+
+        modelBuilder.Entity<UserSettings>()
+            .Property(s => s.MonthlyIncome)
+            .HasPrecision(18, 2);
+
+        modelBuilder.Entity<UserSettings>()
+            .Property(s => s.SavingsGoalPercent)
+            .HasPrecision(5, 2);
+
+        modelBuilder.Entity<CategoryBudget>()
+            .Property(b => b.MonthlyLimit)
+            .HasPrecision(18, 2);
+
+        modelBuilder.Entity<CategoryBudget>()
+            .HasOne(b => b.Category)
+            .WithMany()
+            .HasForeignKey(b => b.CategoryId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<UserSettings>().HasData(
+            new UserSettings { Id = 1, MonthlyIncome = 0, SavingsGoalPercent = 20, Currency = "GBP" }
+        );
 
         modelBuilder.Entity<Category>().HasData(
             new Category { Id = 1,  Name = "Food & Dining",  Icon = "Utensils"     },
