@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using ExpenseTracker.Api.Data;
+using ExpenseTracker.Api.Filters;
 using ExpenseTracker.Api.Models;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -47,22 +48,22 @@ app.MapPost("/expenses", async (CreateExpenseDto dto, AppDbContext db) =>
     db.Expenses.Add(expense);
     await db.SaveChangesAsync();
     return Results.Created($"/expenses/{expense.Id}", expense);
-});
+}).AddEndpointFilter<ValidationFilter<CreateExpenseDto>>();
 
 // PUT update expense
-app.MapPut("/expenses/{id}", async (int id, Expense updated, AppDbContext db) =>
+app.MapPut("/expenses/{id}", async (int id, UpdateExpenseDto dto, AppDbContext db) =>
 {
     var expense = await db.Expenses.FindAsync(id);
     if (expense is null) return Results.NotFound();
 
-    expense.Description = updated.Description;
-    expense.Amount = updated.Amount;
-    expense.Category = updated.Category;
-    expense.Date = updated.Date;
+    expense.Description = dto.Description;
+    expense.Amount = dto.Amount;
+    expense.Category = dto.Category;
+    expense.Date = dto.Date;
 
     await db.SaveChangesAsync();
     return Results.Ok(expense);
-});
+}).AddEndpointFilter<ValidationFilter<UpdateExpenseDto>>();
 
 // DELETE expense
 app.MapDelete("/expenses/{id}", async (int id, AppDbContext db) =>

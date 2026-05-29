@@ -2,7 +2,7 @@ using System.ComponentModel.DataAnnotations;
 
 namespace ExpenseTracker.Api.Models;
 
-public class CreateExpenseDto
+public class UpdateExpenseDto
 {
     [Required]
     [StringLength(200, MinimumLength = 1, ErrorMessage = "Description must be between 1 and 200 characters")]
