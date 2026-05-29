@@ -11,6 +11,7 @@ import {
   Tooltip, ResponsiveContainer, Legend
 } from 'recharts'
 import { authFetch, getUser, loginWithGoogle, logout } from './auth'
+import { Hub } from 'aws-amplify/utils'
 
 const API = import.meta.env.VITE_API_URL
 
@@ -283,10 +284,27 @@ function App() {
       if (user) {
         setAuthed(true)
         setUserEmail(user.signInDetails?.loginId ?? null)
+        if (window.location.pathname === '/callback') {
+          window.location.replace('/')
+        }
       } else {
         setAuthed(false)
       }
     })
+
+    const unsubscribe = Hub.listen('auth', ({ payload }) => {
+      if (payload.event === 'signInWithRedirect') {
+        getUser().then(user => {
+          if (user) {
+            setAuthed(true)
+            setUserEmail(user.signInDetails?.loginId ?? null)
+            window.location.replace('/')
+          }
+        })
+      }
+    })
+
+    return unsubscribe
   }, [])
 
   useEffect(() => {
