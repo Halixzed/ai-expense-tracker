@@ -3,13 +3,14 @@ import DatePicker from 'react-datepicker'
 import 'react-datepicker/dist/react-datepicker.css'
 import {
   Utensils, Car, Tv, ShoppingBag, Heart,
-  Home, Zap, BookOpen, Plane, Package, Settings
+  Home, Zap, BookOpen, Plane, Package, Settings, LogOut
 } from 'lucide-react'
 import type { LucideProps } from 'lucide-react'
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis,
   Tooltip, ResponsiveContainer, Legend
 } from 'recharts'
+import { authFetch, getUser, loginWithGoogle, logout } from './auth'
 
 const API = import.meta.env.VITE_API_URL
 
@@ -167,7 +168,7 @@ function SettingsPanel({ categories, onClose }: { categories: Category[]; onClos
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
-    fetch(`${API}/settings`).then(r => r.json())
+    authFetch(`${API}/settings`).then(r => r.json())
       .then(({ settings: s, budgets: b }: { settings: UserSettings; budgets: CategoryBudget[] }) => {
         if (s) setSettings(s)
         const budgetMap: Record<number, string> = {}
@@ -178,9 +179,9 @@ function SettingsPanel({ categories, onClose }: { categories: Category[]; onClos
 
   const handleSave = async () => {
     setSaving(true)
-    await fetch(`${API}/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings) })
+    await authFetch(`${API}/settings`, { method: 'PUT', body: JSON.stringify(settings) })
     await Promise.all(Object.entries(budgets).map(([catId, limit]) =>
-      fetch(`${API}/settings/budgets/${catId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ monthlyLimit: parseFloat(limit) || 0 }) })
+      authFetch(`${API}/settings/budgets/${catId}`, { method: 'PUT', body: JSON.stringify({ monthlyLimit: parseFloat(limit) || 0 }) })
     ))
     setSaving(false); setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -238,7 +239,24 @@ function SettingsPanel({ categories, onClose }: { categories: Category[]; onClos
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
+function LoginPage() {
+  return (
+    <div className="min-h-screen bg-yellow-300 flex items-center justify-center p-6">
+      <div className="border-4 border-black bg-white shadow-[8px_8px_0_0_#000] p-10 max-w-sm w-full text-center">
+        <h1 className="text-3xl font-black uppercase tracking-tight text-black mb-2">Expense Tracker</h1>
+        <p className="text-black font-medium mb-8">Track your spending. Stay in control.</p>
+        <button onClick={loginWithGoogle}
+          className="border-4 border-black font-black uppercase px-6 py-3 -skew-x-3 shadow-[4px_4px_0_0_#000] hover:shadow-none hover:translate-x-1 hover:translate-y-1 transition-all duration-100 cursor-pointer bg-yellow-300 text-black w-full text-lg">
+          Sign in with Google
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function App() {
+  const [authed, setAuthed] = useState<boolean | null>(null)
+  const [userEmail, setUserEmail] = useState<string | null>(null)
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [settings, setSettings] = useState<UserSettings | null>(null)
@@ -252,15 +270,38 @@ function App() {
 
   const loadAll = () =>
     Promise.all([
-      fetch(`${API}/expenses`).then(r => r.json()),
-      fetch(`${API}/categories`).then(r => r.json()),
-      fetch(`${API}/settings`).then(r => r.json()),
+      authFetch(`${API}/expenses`).then(r => r.json()),
+      authFetch(`${API}/categories`).then(r => r.json()),
+      authFetch(`${API}/settings`).then(r => r.json()),
     ]).then(([exp, cats, { settings: s, budgets: b }]) => {
       setExpenses(exp); setCategories(cats)
       if (s) setSettings(s); setBudgets(b)
     })
 
-  useEffect(() => { loadAll().catch(err => setError(err.message)).finally(() => setLoading(false)) }, [])
+  useEffect(() => {
+    getUser().then(user => {
+      if (user) {
+        setAuthed(true)
+        setUserEmail(user.signInDetails?.loginId ?? null)
+      } else {
+        setAuthed(false)
+      }
+    })
+  }, [])
+
+  useEffect(() => {
+    if (authed) {
+      loadAll().catch(err => setError(err.message)).finally(() => setLoading(false))
+    }
+  }, [authed])
+
+  if (authed === null) return (
+    <div className="min-h-screen bg-yellow-300 flex items-center justify-center">
+      <p className="font-black text-black uppercase text-xl">Loading...</p>
+    </div>
+  )
+
+  if (authed === false) return <LoginPage />
 
   const sym = settings ? (CURRENCY_SYMBOLS[settings.currency] ?? settings.currency) : '£'
   const now = new Date()
@@ -276,7 +317,7 @@ function App() {
   const handleEdit = async (id: number) => {
     if (!editing) return
     try {
-      const res = await fetch(`${API}/expenses/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...editing, amount: parseFloat(String(editing.amount)) }) })
+      const res = await authFetch(`${API}/expenses/${id}`, { method: 'PUT', body: JSON.stringify({ ...editing, amount: parseFloat(String(editing.amount)) }) })
       if (!res.ok) throw new Error('Failed to update expense')
       const updated: Expense = await res.json()
       setExpenses(expenses.map(e => e.id === id ? updated : e))
@@ -286,7 +327,7 @@ function App() {
 
   const handleDelete = async (id: number) => {
     try {
-      const res = await fetch(`${API}/expenses/${id}`, { method: 'DELETE' })
+      const res = await authFetch(`${API}/expenses/${id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Failed to delete expense')
       setExpenses(expenses.filter(e => e.id !== id))
     } catch (err: any) { setError(err.message) }
@@ -297,7 +338,7 @@ function App() {
     if (!form.categoryId) { setError('Please select a category'); return }
     setSubmitting(true)
     try {
-      const res = await fetch(`${API}/expenses`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, amount: parseFloat(form.amount as string), categoryId: form.categoryId }) })
+      const res = await authFetch(`${API}/expenses`, { method: 'POST', body: JSON.stringify({ ...form, amount: parseFloat(form.amount as string), categoryId: form.categoryId }) })
       if (!res.ok) throw new Error('Failed to add expense')
       setExpenses([...expenses, await res.json()])
       setForm({ description: '', amount: '', categoryId: '', date: '' })
@@ -313,11 +354,16 @@ function App() {
         <div className="border-4 border-black bg-white shadow-[6px_6px_0_0_#000] p-4 sm:p-6 mb-6 flex justify-between items-center">
           <div>
             <h1 className="text-2xl sm:text-4xl font-black uppercase tracking-tight text-black">Expense Tracker</h1>
-            <p className="text-black font-medium mt-1 text-sm sm:text-base">Track your spending. Stay in control.</p>
+            {userEmail && <p className="text-black font-medium mt-1 text-sm">{userEmail}</p>}
           </div>
-          <button onClick={() => setShowSettings(s => !s)} className={`${btnBase} ${showSettings ? 'bg-black text-yellow-300' : 'bg-yellow-300 text-black'} flex-shrink-0`}>
-            <Settings size={20} />
-          </button>
+          <div className="flex gap-2 flex-shrink-0">
+            <button onClick={() => setShowSettings(s => !s)} className={`${btnBase} ${showSettings ? 'bg-black text-yellow-300' : 'bg-yellow-300 text-black'}`}>
+              <Settings size={20} />
+            </button>
+            <button onClick={() => logout()} className={`${btnBase} bg-red-400 text-black`}>
+              <LogOut size={20} />
+            </button>
+          </div>
         </div>
 
         {/* Error */}
