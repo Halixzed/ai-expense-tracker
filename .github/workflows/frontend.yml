@@ -28,6 +28,8 @@ jobs:
       - name: Build
         working-directory: expense-tracker-ui
         run: npm run build
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
 
       - name: Deploy to S3
         run: aws s3 sync expense-tracker-ui/dist/ s3://expense-tracker-frontend-1742a828 --delete

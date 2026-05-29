@@ -17,4 +17,5 @@ terraform/terraform.tfvars
 
 # Environment
 .env
+expense-tracker-ui/.env
 appsettings.Development.json
