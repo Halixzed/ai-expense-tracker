@@ -11,9 +11,8 @@ public class CreateExpenseDto
     [Range(0.01, double.MaxValue, ErrorMessage = "Amount must be greater than 0")]
     public decimal Amount { get; set; }
 
-    [Required]
-    [StringLength(100, MinimumLength = 1, ErrorMessage = "Category must be between 1 and 100 characters")]
-    public string Category { get; set; } = string.Empty;
+    [Range(1, int.MaxValue, ErrorMessage = "Please select a valid category")]
+    public int CategoryId { get; set; }
 
     [Required]
     public DateTime Date { get; set; }
