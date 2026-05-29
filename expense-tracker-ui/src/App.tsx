@@ -97,7 +97,7 @@ function BudgetChart({ budgets, thisMonthExpenses, categories, sym }: {
       <BarChart data={data} layout="vertical" margin={{ left: 0, right: 16, top: 4, bottom: 4 }}>
         <XAxis type="number" tick={{ fontWeight: 700, fontSize: 11 }} tickFormatter={v => `${sym}${v}`} />
         <YAxis type="category" dataKey="name" tick={{ fontWeight: 700, fontSize: 11 }} width={90} />
-        <Tooltip formatter={(v: number) => `${sym}${v.toFixed(2)}`} contentStyle={{ border: '3px solid black', borderRadius: 0, fontWeight: 700 }} />
+        <Tooltip formatter={(v) => `${sym}${Number(v).toFixed(2)}`} contentStyle={{ border: '3px solid black', borderRadius: 0, fontWeight: 700 }} />
         <Legend wrapperStyle={{ fontWeight: 700, fontSize: 12 }} />
         <Bar dataKey="spent" name="Spent" radius={0}>
           {data.map((entry, i) => <Cell key={i} fill={entry.colour} stroke="black" strokeWidth={1} />)}
@@ -120,7 +120,7 @@ function AllTimeDonut({ expenses, categories, sym }: { expenses: Expense[]; cate
         <Pie data={data} cx="50%" cy="50%" innerRadius={60} outerRadius={90} dataKey="value" strokeWidth={2} stroke="black">
           {data.map((entry, i) => <Cell key={i} fill={entry.colour} />)}
         </Pie>
-        <Tooltip formatter={(v: number) => `${sym}${v.toFixed(2)}`} contentStyle={{ border: '3px solid black', borderRadius: 0, fontWeight: 700 }} />
+        <Tooltip formatter={(v) => `${sym}${Number(v).toFixed(2)}`} contentStyle={{ border: '3px solid black', borderRadius: 0, fontWeight: 700 }} />
         <Legend wrapperStyle={{ fontWeight: 700, fontSize: 12 }} />
       </PieChart>
     </ResponsiveContainer>
