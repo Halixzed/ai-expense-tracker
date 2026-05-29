@@ -218,7 +218,7 @@ function App() {
             </div>
             <DatePicker
               selected={form.date ? new Date(form.date) : null}
-              onChange={(date) => setForm({ ...form, date: date ? date.toISOString().split('T')[0] : '' })}
+              onChange={(date: Date | null) => setForm({ ...form, date: date ? date.toISOString().split('T')[0] : '' })}
               dateFormat="yyyy-MM-dd"
               placeholderText="Select a date"
               className={inputBase}
@@ -251,7 +251,7 @@ function App() {
                       </div>
                       <DatePicker
                         selected={editing.date ? new Date(editing.date) : null}
-                        onChange={(date) => setEditing({ ...editing, date: date ? date.toISOString().split('T')[0] : '' })}
+                        onChange={(date: Date | null) => setEditing({ ...editing!, date: date ? date.toISOString().split('T')[0] : '' })}
                         dateFormat="yyyy-MM-dd"
                         placeholderText="Select a date"
                         className={inputBase}
