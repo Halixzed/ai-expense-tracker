@@ -52,6 +52,7 @@ interface Category { id: number; name: string; icon: string }
 interface Expense { id: number; description: string; amount: number; categoryId: number; categoryName: string; categoryIcon: string; date: string }
 interface UserSettings { id: number; monthlyIncome: number; savingsGoalPercent: number; currency: string }
 interface CategoryBudget { id: number; categoryId: number; monthlyLimit: number; category: Category }
+interface BankTransaction { id: string; description: string; amount: number; currency: string; date: string; category: string; mappedCategoryId: number; mappedCategoryName: string; merchantName: string | null }
 
 const btnBase = 'border-4 border-black font-bold uppercase px-4 py-2 -skew-x-3 shadow-[4px_4px_0_0_#000] hover:shadow-none hover:translate-x-1 hover:translate-y-1 transition-all duration-100 cursor-pointer'
 const inputBase = 'border-4 border-black px-3 py-2 w-full focus:outline-none focus:ring-0 bg-white text-black font-medium'
@@ -244,8 +245,8 @@ function LoginPage() {
   return (
     <div className="min-h-screen bg-yellow-300 flex items-center justify-center p-6">
       <div className="border-4 border-black bg-white shadow-[8px_8px_0_0_#000] p-10 max-w-sm w-full text-center">
-        <h1 className="text-3xl font-black uppercase tracking-tight text-black mb-2">Expense Tracker</h1>
-        <p className="text-black font-medium mb-8">Track your spending. Stay in control.</p>
+        <h1 className="text-3xl font-black uppercase tracking-tight text-black mb-2">FinTrack</h1>
+        <p className="text-black font-medium mb-8">AI-powered finance tracking with Open Banking.</p>
         <button onClick={loginWithGoogle}
           className="border-4 border-black font-black uppercase px-6 py-3 -skew-x-3 shadow-[4px_4px_0_0_#000] hover:shadow-none hover:translate-x-1 hover:translate-y-1 transition-all duration-100 cursor-pointer bg-yellow-300 text-black w-full text-lg">
           Sign in with Google
@@ -270,6 +271,11 @@ function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [insight, setInsight] = useState<string | null>(null)
   const [loadingInsight, setLoadingInsight] = useState(false)
+  const [bankConnected, setBankConnected] = useState<boolean | null>(null)
+  const [transactions, setTransactions] = useState<BankTransaction[]>([])
+  const [selectedTxIds, setSelectedTxIds] = useState<Set<string>>(new Set())
+  const [loadingTx, setLoadingTx] = useState(false)
+  const [importingTx, setImportingTx] = useState(false)
 
   const loadAll = () =>
     Promise.all([
@@ -310,9 +316,18 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (authed) {
-      loadAll().catch(err => setError(err.message)).finally(() => setLoading(false))
+    if (!authed) return
+    if (window.location.pathname === '/bank/callback') {
+      const code = new URLSearchParams(window.location.search).get('code')
+      if (code) {
+        const redirectUri = `${window.location.origin}/bank/callback`
+        authFetch(`${API}/bank/exchange`, { method: 'POST', body: JSON.stringify({ code, redirectUri }) })
+          .finally(() => window.location.replace('/'))
+        return
+      }
     }
+    loadAll().catch(err => setError(err.message)).finally(() => setLoading(false))
+    authFetch(`${API}/bank/status`).then(r => r.json()).then(d => setBankConnected(d.connected)).catch(() => setBankConnected(false))
   }, [authed])
 
   if (authed === null) return (
@@ -324,6 +339,56 @@ function App() {
   if (authed === false) return <LoginPage />
 
   const sym = settings ? (CURRENCY_SYMBOLS[settings.currency] ?? settings.currency) : '£'
+
+  const connectBank = async () => {
+    const res = await authFetch(`${API}/bank/auth-url`)
+    const { url } = await res.json()
+    const redirectUri = encodeURIComponent(`${window.location.origin}/bank/callback`)
+    window.location.href = url + redirectUri
+  }
+
+  const disconnectBank = async () => {
+    await authFetch(`${API}/bank/disconnect`, { method: 'DELETE' })
+    setBankConnected(false)
+    setTransactions([])
+    setSelectedTxIds(new Set())
+  }
+
+  const fetchTransactions = async () => {
+    setLoadingTx(true)
+    try {
+      const res = await authFetch(`${API}/bank/transactions`)
+      if (!res.ok) throw new Error('Failed to fetch transactions')
+      setTransactions(await res.json())
+    } catch (err: any) { setError(err.message) }
+    finally { setLoadingTx(false) }
+  }
+
+  const toggleTx = (id: string) => {
+    setSelectedTxIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  const importTransactions = async (toImport: BankTransaction[]) => {
+    setImportingTx(true)
+    try {
+      const res = await authFetch(`${API}/bank/import`, {
+        method: 'POST',
+        body: JSON.stringify({ transactions: toImport })
+      })
+      if (!res.ok) throw new Error('Import failed')
+      const { imported } = await res.json()
+      const importedIds = new Set(toImport.map(t => t.id))
+      setTransactions(prev => prev.filter(t => !importedIds.has(t.id)))
+      setSelectedTxIds(new Set())
+      await loadAll()
+      alert(`✅ Imported ${imported} transactions as expenses`)
+    } catch (err: any) { setError(err.message) }
+    finally { setImportingTx(false) }
+  }
 
   const getInsights = async () => {
     setLoadingInsight(true)
@@ -388,7 +453,7 @@ function App() {
         {/* Header */}
         <div className="border-4 border-black bg-white shadow-[6px_6px_0_0_#000] p-4 sm:p-6 mb-6 flex justify-between items-center">
           <div>
-            <h1 className="text-2xl sm:text-4xl font-black uppercase tracking-tight text-black">Expense Tracker</h1>
+            <h1 className="text-2xl sm:text-4xl font-black uppercase tracking-tight text-black">FinTrack</h1>
             {userEmail && <p className="text-black font-medium mt-1 text-sm">{userEmail}</p>}
           </div>
           <div className="flex gap-2 flex-shrink-0">
@@ -445,6 +510,82 @@ function App() {
           </div>
         )}
 
+        {/* Bank Account */}
+        <div className="border-4 border-black bg-white shadow-[6px_6px_0_0_#000] p-4 sm:p-6 mb-6">
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <h2 className="text-xl font-black uppercase text-black">Bank Account</h2>
+              <p className="text-sm font-medium text-black">Powered by TrueLayer</p>
+            </div>
+            {bankConnected === false && (
+              <button onClick={connectBank} className={`${btnBase} bg-green-400 text-black`}>Connect Bank</button>
+            )}
+            {bankConnected === true && (
+              <button onClick={disconnectBank} className={`${btnBase} bg-red-400 text-black text-sm`}>Disconnect</button>
+            )}
+          </div>
+
+          {bankConnected === null && <p className="font-medium text-black">Checking connection...</p>}
+
+          {bankConnected === false && (
+            <p className="font-medium text-black">Connect your bank account to automatically import transactions as expenses.</p>
+          )}
+
+          {bankConnected === true && (
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-wrap gap-2">
+                <button onClick={fetchTransactions} disabled={loadingTx} className={`${btnBase} bg-yellow-300 text-black`}>
+                  {loadingTx ? 'Fetching...' : 'Fetch Transactions'}
+                </button>
+                {transactions.length > 0 && (
+                  <>
+                    <button onClick={() => importTransactions(transactions)} disabled={importingTx} className={`${btnBase} bg-green-400 text-black`}>
+                      {importingTx ? 'Importing...' : `Import All (${transactions.length})`}
+                    </button>
+                    {selectedTxIds.size > 0 && (
+                      <button onClick={() => importTransactions(transactions.filter(t => selectedTxIds.has(t.id)))} disabled={importingTx} className={`${btnBase} bg-blue-300 text-black`}>
+                        Import Selected ({selectedTxIds.size})
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {transactions.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <div className="flex justify-between items-center">
+                    <p className="font-black uppercase text-black text-sm">{transactions.length} transactions</p>
+                    <button onClick={() => setSelectedTxIds(prev => prev.size === transactions.length ? new Set() : new Set(transactions.map(t => t.id)))}
+                      className="text-sm font-bold underline cursor-pointer text-black">
+                      {selectedTxIds.size === transactions.length ? 'Deselect All' : 'Select All'}
+                    </button>
+                  </div>
+                  <ul className="flex flex-col gap-2 max-h-96 overflow-y-auto">
+                    {transactions.map(tx => (
+                      <li key={tx.id} onClick={() => toggleTx(tx.id)}
+                        className={`border-4 border-black p-3 cursor-pointer transition-all ${selectedTxIds.has(tx.id) ? 'bg-yellow-300' : 'bg-white hover:bg-gray-50'}`}>
+                        <div className="flex justify-between items-center gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <input type="checkbox" readOnly checked={selectedTxIds.has(tx.id)} className="w-4 h-4 border-2 border-black flex-shrink-0" />
+                            <div className="min-w-0">
+                              <p className="font-black text-black text-sm truncate">{tx.merchantName ?? tx.description}</p>
+                              <div className="flex items-center gap-2 mt-1">
+                                <CategoryBadge name={tx.mappedCategoryName} icon={categories.find(c => c.id === tx.mappedCategoryId)?.icon ?? 'Package'} />
+                                <span className="text-xs font-medium text-black">{tx.date}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <span className="font-black text-black whitespace-nowrap flex-shrink-0">{sym}{tx.amount.toFixed(2)}</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* AI Insights */}
         <div className="border-4 border-black bg-white shadow-[6px_6px_0_0_#000] p-4 sm:p-6 mb-6">
           <div className="flex justify-between items-center mb-4">
@@ -484,7 +625,18 @@ function App() {
 
         {/* Expense List */}
         <div className="border-4 border-black bg-white shadow-[6px_6px_0_0_#000] p-4 sm:p-6">
-          <h2 className="text-xl font-black uppercase mb-4 text-black">Your Expenses</h2>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-black uppercase text-black">Your Expenses</h2>
+            {expenses.length > 0 && (
+              <button onClick={async () => {
+                if (!confirm('Delete all expenses? This cannot be undone.')) return
+                await authFetch(`${API}/expenses/all`, { method: 'DELETE' })
+                setExpenses([])
+              }} className={`${btnBase} bg-red-400 text-black text-xs px-2 py-1`}>
+                Clear All
+              </button>
+            )}
+          </div>
           {loading ? <p className="font-bold text-black">Loading...</p>
             : expenses.length === 0 ? <p className="font-bold text-black">No expenses yet. Add one above!</p>
             : (

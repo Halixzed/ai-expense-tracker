@@ -41,6 +41,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 
 builder.Services.AddAuthorization();
+builder.Services.AddHttpClient("truelayer");
 builder.Services.AddSingleton<AmazonBedrockRuntimeClient>(
     new AmazonBedrockRuntimeClient(RegionEndpoint.EUWest2));
 
@@ -183,6 +184,246 @@ app.MapDelete("/expenses/{id}", async (HttpContext ctx, int id, AppDbContext db)
     db.Expenses.Remove(expense);
     await db.SaveChangesAsync();
     return Results.NoContent();
+}).RequireAuthorization();
+
+// ── TrueLayer ─────────────────────────────────────────────────────────────────
+
+var tlClientId     = builder.Configuration["TrueLayer:ClientId"] ?? "";
+var tlClientSecret = builder.Configuration["TrueLayer:ClientSecret"] ?? "";
+var tlAuthUrl      = builder.Configuration["TrueLayer:AuthUrl"] ?? "https://auth.truelayer-sandbox.com";
+var tlApiUrl       = builder.Configuration["TrueLayer:ApiUrl"] ?? "https://api.truelayer-sandbox.com";
+
+var tlCategoryMap = new Dictionary<string, int>
+{
+    { "EATING_OUT", 1 },    { "FOOD", 1 },
+    { "TRANSPORT", 2 },     { "TRAVEL", 9 },
+    { "ENTERTAINMENT", 3 }, { "SHOPPING", 4 },
+    { "HEALTH", 5 },        { "HOUSING", 6 },
+    { "BILLS", 7 },         { "EDUCATION", 8 }
+};
+
+app.MapGet("/bank/auth-url", (HttpContext ctx) =>
+{
+    GetUserId(ctx);
+    var scope = Uri.EscapeDataString("info accounts balance cards transactions offline_access");
+    var url = $"{tlAuthUrl}/?response_type=code&client_id={tlClientId}&scope={scope}&providers=mock&redirect_uri=";
+    return Results.Ok(new { url });
+}).RequireAuthorization();
+
+app.MapPost("/bank/exchange", async (HttpContext ctx, ExchangeCodeDto dto, AppDbContext db, IHttpClientFactory factory) =>
+{
+    var userId = GetUserId(ctx);
+    var client = factory.CreateClient("truelayer");
+
+    var form = new FormUrlEncodedContent(new Dictionary<string, string>
+    {
+        ["grant_type"]    = "authorization_code",
+        ["client_id"]     = tlClientId,
+        ["client_secret"] = tlClientSecret,
+        ["code"]          = dto.Code,
+        ["redirect_uri"]  = dto.RedirectUri
+    });
+
+    var tokenRes = await client.PostAsync($"{tlAuthUrl}/connect/token", form);
+    if (!tokenRes.IsSuccessStatusCode) return Results.BadRequest("Token exchange failed");
+
+    var tokenJson = await JsonDocument.ParseAsync(await tokenRes.Content.ReadAsStreamAsync());
+    var accessToken  = tokenJson.RootElement.GetProperty("access_token").GetString() ?? "";
+    var refreshToken = tokenJson.RootElement.GetProperty("refresh_token").GetString() ?? "";
+    var expiresIn    = tokenJson.RootElement.GetProperty("expires_in").GetInt32();
+
+    var existing = await db.BankConnections.FirstOrDefaultAsync(b => b.UserId == userId);
+    if (existing is null)
+    {
+        db.BankConnections.Add(new BankConnection
+        {
+            UserId = userId, AccessToken = accessToken,
+            RefreshToken = refreshToken,
+            ExpiresAt = DateTime.UtcNow.AddSeconds(expiresIn),
+            ConnectedAt = DateTime.UtcNow
+        });
+    }
+    else
+    {
+        existing.AccessToken = accessToken;
+        existing.RefreshToken = refreshToken;
+        existing.ExpiresAt = DateTime.UtcNow.AddSeconds(expiresIn);
+    }
+
+    await db.SaveChangesAsync();
+    return Results.Ok(new { connected = true });
+}).RequireAuthorization();
+
+app.MapGet("/bank/status", async (HttpContext ctx, AppDbContext db) =>
+{
+    var userId = GetUserId(ctx);
+    var connection = await db.BankConnections.FirstOrDefaultAsync(b => b.UserId == userId);
+    return Results.Ok(new { connected = connection is not null, connectedAt = connection?.ConnectedAt });
+}).RequireAuthorization();
+
+app.MapDelete("/bank/disconnect", async (HttpContext ctx, AppDbContext db) =>
+{
+    var userId = GetUserId(ctx);
+    var connection = await db.BankConnections.FirstOrDefaultAsync(b => b.UserId == userId);
+    if (connection is null) return Results.NotFound();
+    db.BankConnections.Remove(connection);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
+}).RequireAuthorization();
+
+app.MapGet("/bank/transactions", async (HttpContext ctx, AppDbContext db, IHttpClientFactory factory, AmazonBedrockRuntimeClient bedrock) =>
+{
+    var userId = GetUserId(ctx);
+    var connection = await db.BankConnections.FirstOrDefaultAsync(b => b.UserId == userId);
+    if (connection is null) return Results.BadRequest("No bank connected");
+
+    var client = factory.CreateClient("truelayer");
+    client.DefaultRequestHeaders.Authorization =
+        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", connection.AccessToken);
+
+    var accountsRes = await client.GetAsync($"{tlApiUrl}/data/v1/accounts");
+    if (!accountsRes.IsSuccessStatusCode) return Results.BadRequest("Failed to fetch accounts");
+
+    var accountsJson = await JsonDocument.ParseAsync(await accountsRes.Content.ReadAsStreamAsync());
+    var accounts = accountsJson.RootElement.GetProperty("results").EnumerateArray().ToList();
+
+    var categoryNameToId = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+    {
+        { "Food & Dining", 1 }, { "Transport", 2 }, { "Entertainment", 3 },
+        { "Shopping", 4 },      { "Health", 5 },     { "Housing", 6 },
+        { "Utilities", 7 },     { "Education", 8 },  { "Travel", 9 }, { "Other", 10 }
+    };
+    var categoryIdToName = categoryNameToId.ToDictionary(k => k.Value, k => k.Key);
+
+    var rawTransactions = new List<(string Id, string Label, decimal Amount, string Currency, string Date, string? MerchantName)>();
+
+    foreach (var account in accounts)
+    {
+        var accountId = account.GetProperty("account_id").GetString();
+        var txRes = await client.GetAsync($"{tlApiUrl}/data/v1/accounts/{accountId}/transactions");
+        if (!txRes.IsSuccessStatusCode) continue;
+
+        var txJson = await JsonDocument.ParseAsync(await txRes.Content.ReadAsStreamAsync());
+        foreach (var t in txJson.RootElement.GetProperty("results").EnumerateArray()
+            .Where(t => t.GetProperty("amount").GetDecimal() < 0))
+        {
+            var merchant = t.TryGetProperty("merchant_name", out var m) && m.ValueKind != JsonValueKind.Null ? m.GetString() : null;
+            var desc = t.TryGetProperty("description", out var d) ? d.GetString() ?? "Unknown" : "Unknown";
+            rawTransactions.Add((
+                t.GetProperty("transaction_id").GetString()!,
+                merchant ?? desc,
+                Math.Abs(t.GetProperty("amount").GetDecimal()),
+                t.GetProperty("currency").GetString()!,
+                t.GetProperty("timestamp").GetString()!.Substring(0, 10),
+                merchant
+            ));
+        }
+    }
+
+    // AI categorisation in one Bedrock call
+    var aiCategoryMap = new Dictionary<string, int>();
+    if (rawTransactions.Any())
+    {
+        var txList = string.Join("\n", rawTransactions.Select(t => $"{t.Id}: {t.Label}"));
+        var prompt = $$"""
+            Categorise each transaction into exactly one of these categories:
+            Food & Dining, Transport, Entertainment, Shopping, Health, Housing, Utilities, Education, Travel, Other
+
+            Transactions:
+            {{txList}}
+
+            Return ONLY a valid JSON object mapping each transaction ID to its category name.
+            Example: {"id1": "Food & Dining", "id2": "Transport"}
+            No explanation, no markdown, just the JSON object.
+            """;
+
+        try
+        {
+            var bedrockBody = JsonSerializer.Serialize(new
+            {
+                messages = new[] { new { role = "user", content = new[] { new { text = prompt } } } },
+                inferenceConfig = new { maxTokens = 1024, temperature = 0.1 }
+            });
+
+            var bedrockReq = new InvokeModelRequest
+            {
+                ModelId = "amazon.nova-lite-v1:0",
+                ContentType = "application/json",
+                Accept = "application/json",
+                Body = new MemoryStream(Encoding.UTF8.GetBytes(bedrockBody))
+            };
+
+            var bedrockRes = await bedrock.InvokeModelAsync(bedrockReq);
+            var bedrockJson = await JsonDocument.ParseAsync(bedrockRes.Body);
+            var responseText = bedrockJson.RootElement
+                .GetProperty("output").GetProperty("message")
+                .GetProperty("content")[0].GetProperty("text").GetString() ?? "{}";
+
+            var start = responseText.IndexOf('{');
+            var end = responseText.LastIndexOf('}');
+            if (start >= 0 && end > start)
+            {
+                var jsonPart = responseText.Substring(start, end - start + 1);
+                var parsed = JsonDocument.Parse(jsonPart);
+                foreach (var prop in parsed.RootElement.EnumerateObject())
+                {
+                    var catName = prop.Value.GetString() ?? "Other";
+                    categoryNameToId.TryGetValue(catName, out var catId);
+                    aiCategoryMap[prop.Name] = catId > 0 ? catId : 10;
+                }
+            }
+        }
+        catch { /* fallback to Other if AI fails */ }
+    }
+
+    var result = rawTransactions.Select(t =>
+    {
+        var catId = aiCategoryMap.GetValueOrDefault(t.Id, 10);
+        return new
+        {
+            id                 = t.Id,
+            description        = t.Label,
+            amount             = t.Amount,
+            currency           = t.Currency,
+            date               = t.Date,
+            mappedCategoryId   = catId,
+            mappedCategoryName = categoryIdToName.GetValueOrDefault(catId, "Other"),
+            merchantName       = t.MerchantName
+        };
+    }).OrderByDescending(t => t.date);
+
+    return Results.Ok(result);
+}).RequireAuthorization();
+
+app.MapPost("/bank/import", async (HttpContext ctx, ImportTransactionsDto dto, AppDbContext db) =>
+{
+    var userId = GetUserId(ctx);
+    var imported = 0;
+
+    foreach (var tx in dto.Transactions)
+    {
+        db.Expenses.Add(new Expense
+        {
+            UserId      = userId,
+            Description = tx.MerchantName ?? tx.Description,
+            Amount      = tx.Amount,
+            CategoryId  = tx.MappedCategoryId > 0 ? tx.MappedCategoryId : 10,
+            Date        = DateTime.Parse(tx.Date)
+        });
+        imported++;
+    }
+
+    await db.SaveChangesAsync();
+    return Results.Ok(new { imported });
+}).RequireAuthorization();
+
+app.MapDelete("/expenses/all", async (HttpContext ctx, AppDbContext db) =>
+{
+    var userId = GetUserId(ctx);
+    var expenses = await db.Expenses.Where(e => e.UserId == userId).ToListAsync();
+    db.Expenses.RemoveRange(expenses);
+    await db.SaveChangesAsync();
+    return Results.Ok(new { deleted = expenses.Count });
 }).RequireAuthorization();
 
 // ── AI Insights ───────────────────────────────────────────────────────────────

@@ -15,6 +15,10 @@ resource "aws_apprunner_service" "api" {
         runtime_environment_variables = {
           "ConnectionStrings__DefaultConnection" = var.db_connection_string
           "ASPNETCORE_ENVIRONMENT"               = "Production"
+          "TrueLayer__ClientId"                  = "sandbox-aiexpensetracker-8da926"
+          "TrueLayer__ClientSecret"              = "2718b8ac-f772-4202-a787-49d709865e7d"
+          "TrueLayer__AuthUrl"                   = "https://auth.truelayer-sandbox.com"
+          "TrueLayer__ApiUrl"                    = "https://api.truelayer-sandbox.com"
         }
       }
     }
