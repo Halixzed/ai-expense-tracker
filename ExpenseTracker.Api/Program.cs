@@ -245,7 +245,7 @@ app.MapGet("/expenses/insights", async (HttpContext ctx, AppDbContext db, Amazon
 
     var request = new InvokeModelRequest
     {
-        ModelId = "anthropic.claude-3-haiku-20240307-v1:0",
+        ModelId = "anthropic.claude-3-5-haiku-20241022-v1:0",
         ContentType = "application/json",
         Accept = "application/json",
         Body = new MemoryStream(Encoding.UTF8.GetBytes(body))

@@ -22,7 +22,7 @@ resource "aws_iam_role_policy" "bedrock_policy" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["bedrock:InvokeModel"]
-      Resource = "arn:aws:bedrock:eu-west-2::foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
+      Resource = "arn:aws:bedrock:eu-west-2::foundation-model/anthropic.claude-3-5-haiku-20241022-v1:0"
     }]
   })
 }
