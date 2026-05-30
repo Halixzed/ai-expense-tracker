@@ -268,6 +268,8 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [insight, setInsight] = useState<string | null>(null)
+  const [loadingInsight, setLoadingInsight] = useState(false)
 
   const loadAll = () =>
     Promise.all([
@@ -322,6 +324,21 @@ function App() {
   if (authed === false) return <LoginPage />
 
   const sym = settings ? (CURRENCY_SYMBOLS[settings.currency] ?? settings.currency) : '£'
+
+  const getInsights = async () => {
+    setLoadingInsight(true)
+    setInsight(null)
+    try {
+      const res = await authFetch(`${API}/expenses/insights`)
+      if (!res.ok) throw new Error('Failed to get insights')
+      const data = await res.json()
+      setInsight(data.insight)
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoadingInsight(false)
+    }
+  }
   const now = new Date()
   const thisMonthExpenses = expenses.filter(e => {
     const d = new Date(e.date)
@@ -427,6 +444,26 @@ function App() {
             <AllTimeDonut expenses={expenses} categories={categories} sym={sym} />
           </div>
         )}
+
+        {/* AI Insights */}
+        <div className="border-4 border-black bg-white shadow-[6px_6px_0_0_#000] p-4 sm:p-6 mb-6">
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <h2 className="text-xl font-black uppercase text-black">AI Insights</h2>
+              <p className="text-sm font-medium text-black">Powered by AWS Bedrock</p>
+            </div>
+            <button onClick={getInsights} disabled={loadingInsight} className={`${btnBase} bg-purple-300 text-black`}>
+              {loadingInsight ? 'Analysing...' : 'Get Insights'}
+            </button>
+          </div>
+          {insight ? (
+            <div className="border-4 border-black bg-yellow-50 p-4 shadow-[4px_4px_0_0_#000]">
+              <p className="font-medium text-black whitespace-pre-wrap leading-relaxed">{insight}</p>
+            </div>
+          ) : (
+            <p className="font-medium text-black">Click <strong>Get Insights</strong> to get AI-powered spending analysis based on your expenses and goals.</p>
+          )}
+        </div>
 
         {/* Add Expense Form */}
         <div className="border-4 border-black bg-white shadow-[6px_6px_0_0_#000] p-4 sm:p-6 mb-6">

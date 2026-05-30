@@ -1,3 +1,8 @@
+using System.Text;
+using System.Text.Json;
+using Amazon;
+using Amazon.BedrockRuntime;
+using Amazon.BedrockRuntime.Model;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -36,6 +41,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 
 builder.Services.AddAuthorization();
+builder.Services.AddSingleton<AmazonBedrockRuntimeClient>(
+    new AmazonBedrockRuntimeClient(RegionEndpoint.EUWest2));
 
 var app = builder.Build();
 
@@ -176,6 +183,82 @@ app.MapDelete("/expenses/{id}", async (HttpContext ctx, int id, AppDbContext db)
     db.Expenses.Remove(expense);
     await db.SaveChangesAsync();
     return Results.NoContent();
+}).RequireAuthorization();
+
+// ── AI Insights ───────────────────────────────────────────────────────────────
+
+app.MapGet("/expenses/insights", async (HttpContext ctx, AppDbContext db, AmazonBedrockRuntimeClient bedrock) =>
+{
+    var userId = GetUserId(ctx);
+
+    var expenses = await db.Expenses
+        .Include(e => e.Category)
+        .Where(e => e.UserId == userId)
+        .OrderByDescending(e => e.Date)
+        .Take(50)
+        .ToListAsync();
+
+    var settings = await db.UserSettings.FirstOrDefaultAsync(s => s.UserId == userId);
+    var budgets = await db.CategoryBudgets.Include(b => b.Category).Where(b => b.UserId == userId).ToListAsync();
+
+    if (!expenses.Any())
+        return Results.Ok(new { insight = "Add some expenses first and I'll analyse your spending patterns!" });
+
+    var now = DateTime.UtcNow;
+    var thisMonth = expenses.Where(e => e.Date.Month == now.Month && e.Date.Year == now.Year).ToList();
+    var totalThisMonth = thisMonth.Sum(e => e.Amount);
+    var categoryTotals = thisMonth.GroupBy(e => e.Category.Name)
+        .Select(g => $"{g.Key}: £{g.Sum(e => e.Amount):F2}")
+        .ToList();
+
+    var prompt = $"""
+        You are a friendly personal finance advisor. Analyse this user's expense data and give practical advice.
+
+        Monthly Income: {(settings != null ? $"£{settings.MonthlyIncome:F2}" : "Not set")}
+        Savings Goal: {(settings != null ? $"{settings.SavingsGoalPercent}% (£{settings.MonthlyIncome * settings.SavingsGoalPercent / 100:F2}/month)" : "Not set")}
+        Total spent this month: £{totalThisMonth:F2}
+
+        This month's spending by category:
+        {string.Join("\n", categoryTotals.Any() ? categoryTotals : new List<string> { "No expenses this month yet" })}
+
+        Category budgets:
+        {string.Join("\n", budgets.Any() ? budgets.Select(b => $"{b.Category.Name}: £{b.MonthlyLimit:F2}/month") : new List<string> { "No budgets set" })}
+
+        Recent expenses (last 10):
+        {string.Join("\n", expenses.Take(10).Select(e => $"- {e.Date:dd MMM}: {e.Description} ({e.Category.Name}) £{e.Amount:F2}"))}
+
+        Provide a concise analysis with:
+        1. Whether they are on track for their savings goal
+        2. Their biggest spending category and whether it seems reasonable
+        3. Two specific actionable tips to improve their finances
+        4. One positive observation
+
+        Keep it friendly, concise and use British English. Use bullet points. Max 200 words.
+        """;
+
+    var body = JsonSerializer.Serialize(new
+    {
+        anthropic_version = "bedrock-2023-05-31",
+        max_tokens = 512,
+        messages = new[] { new { role = "user", content = prompt } }
+    });
+
+    var request = new InvokeModelRequest
+    {
+        ModelId = "anthropic.claude-3-haiku-20240307-v1:0",
+        ContentType = "application/json",
+        Accept = "application/json",
+        Body = new MemoryStream(Encoding.UTF8.GetBytes(body))
+    };
+
+    var response = await bedrock.InvokeModelAsync(request);
+    var json = await JsonDocument.ParseAsync(response.Body);
+    var insight = json.RootElement
+        .GetProperty("content")[0]
+        .GetProperty("text")
+        .GetString();
+
+    return Results.Ok(new { insight });
 }).RequireAuthorization();
 
 app.Run();

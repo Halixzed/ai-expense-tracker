@@ -20,6 +20,10 @@ resource "aws_apprunner_service" "api" {
     }
   }
 
+  instance_configuration {
+    instance_role_arn = aws_iam_role.apprunner_instance_role.arn
+  }
+
   tags = {
     Name = "${var.app_name}-api"
   }
