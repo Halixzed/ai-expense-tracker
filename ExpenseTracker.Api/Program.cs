@@ -227,13 +227,17 @@ app.MapGet("/expenses/insights", async (HttpContext ctx, AppDbContext db, Amazon
         Recent expenses (last 10):
         {string.Join("\n", expenses.Take(10).Select(e => $"- {e.Date:dd MMM}: {e.Description} ({e.Category.Name}) £{e.Amount:F2}"))}
 
-        Provide a concise analysis with:
-        1. Whether they are on track for their savings goal
-        2. Their biggest spending category and whether it seems reasonable
-        3. Two specific actionable tips to improve their finances
-        4. One positive observation
+        Provide a concise analysis with these sections, each starting with an emoji:
+        💰 Savings goal — are they on track?
+        📊 Biggest spend — is it reasonable?
+        💡 Two specific actionable tips to improve their finances
+        ✅ One positive observation
 
-        Keep it friendly, concise and use British English. Use bullet points. Max 200 words.
+        Rules:
+        - Use plain text only, no markdown, no asterisks, no bold formatting
+        - Use emojis liberally to make it engaging
+        - Keep it friendly, concise and use British English
+        - Max 200 words
         """;
 
     var body = JsonSerializer.Serialize(new
@@ -262,7 +266,8 @@ app.MapGet("/expenses/insights", async (HttpContext ctx, AppDbContext db, Amazon
         .GetProperty("text")
         .GetString();
 
-    return Results.Ok(new { insight });
+    var cleaned = insight?.Replace("**", "").Replace("##", "").Replace("# ", "");
+    return Results.Ok(new { insight = cleaned });
 }).RequireAuthorization();
 
 app.Run();
