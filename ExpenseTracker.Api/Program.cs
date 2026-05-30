@@ -238,14 +238,16 @@ app.MapGet("/expenses/insights", async (HttpContext ctx, AppDbContext db, Amazon
 
     var body = JsonSerializer.Serialize(new
     {
-        anthropic_version = "bedrock-2023-05-31",
-        max_tokens = 512,
-        messages = new[] { new { role = "user", content = prompt } }
+        messages = new[]
+        {
+            new { role = "user", content = new[] { new { text = prompt } } }
+        },
+        inferenceConfig = new { maxTokens = 512, temperature = 0.7 }
     });
 
     var request = new InvokeModelRequest
     {
-        ModelId = "anthropic.claude-3-5-haiku-20241022-v1:0",
+        ModelId = "amazon.nova-lite-v1:0",
         ContentType = "application/json",
         Accept = "application/json",
         Body = new MemoryStream(Encoding.UTF8.GetBytes(body))
@@ -254,6 +256,8 @@ app.MapGet("/expenses/insights", async (HttpContext ctx, AppDbContext db, Amazon
     var response = await bedrock.InvokeModelAsync(request);
     var json = await JsonDocument.ParseAsync(response.Body);
     var insight = json.RootElement
+        .GetProperty("output")
+        .GetProperty("message")
         .GetProperty("content")[0]
         .GetProperty("text")
         .GetString();
